@@ -37,6 +37,7 @@ DEFAULT_ALIGN_MODELS_HF = {
     "fa": "jonatasgrosman/wav2vec2-large-xlsr-53-persian",
     "el": "jonatasgrosman/wav2vec2-large-xlsr-53-greek",
     "tr": "mpoyraz/wav2vec2-xls-r-300m-cv7-turkish",
+    "ms": "malay-huggingface/wav2vec2-xls-r-300m-mixed"
 }
 
 
@@ -50,7 +51,8 @@ def load_align_model(language_code, device, model_name=None):
         else:
             print(f"There is no default alignment model set for this language ({language_code}).\
                 Please find a wav2vec2.0 model finetuned on this language in https://huggingface.co/models, then pass the model name in --align_model [MODEL_NAME]")
-            raise ValueError(f"No default align-model for language: {language_code}")
+            raise ValueError(
+                f"No default align-model for language: {language_code}")
 
     if model_name in torchaudio.pipelines.__all__:
         pipeline_type = "torchaudio"
@@ -65,13 +67,16 @@ def load_align_model(language_code, device, model_name=None):
         except Exception as e:
             print(e)
             print(f"Error loading model from huggingface, check https://huggingface.co/models for finetuned wav2vec2.0 models")
-            raise ValueError(f'The chosen align_model "{model_name}" could not be found in huggingface (https://huggingface.co/models) or torchaudio (https://pytorch.org/audio/stable/pipelines.html#id14)')
+            raise ValueError(
+                f'The chosen align_model "{model_name}" could not be found in huggingface (https://huggingface.co/models) or torchaudio (https://pytorch.org/audio/stable/pipelines.html#id14)')
         pipeline_type = "huggingface"
         align_model = align_model.to(device)
         labels = processor.tokenizer.get_vocab()
-        align_dictionary = {char.lower(): code for char,code in processor.tokenizer.get_vocab().items()}
+        align_dictionary = {char.lower(): code for char,
+                            code in processor.tokenizer.get_vocab().items()}
 
-    align_metadata = {"language": language_code, "dictionary": align_dictionary, "type": pipeline_type}
+    align_metadata = {"language": language_code,
+                      "dictionary": align_dictionary, "type": pipeline_type}
 
     return align_model, align_metadata
 
@@ -93,7 +98,7 @@ def align(
     ----------
     transcript: Iterator[dict]
         The Whisper model instance
-    
+
     model: torch.nn.Module
         Alignment model (wav2vec2)
 
@@ -173,7 +178,7 @@ def align(
                 # wav2vec2 models use "|" character to represent spaces
                 if model_lang not in LANGUAGES_WITHOUT_SPACES:
                     char_ = char_.replace(" ", "|")
-                
+
                 # ignore whitespace at beginning and end of transcript
                 if cdx < num_leading:
                     pass
@@ -190,9 +195,10 @@ def align(
 
             # if no characters are in the dictionary, then we skip this segment...
             if len(clean_char) == 0:
-                print(f'Failed to align segment ("{segment["text"]}"): no characters in this segment found in model dictionary, resorting to original...')
-                break          
-           
+                print(
+                    f'Failed to align segment ("{segment["text"]}"): no characters in this segment found in model dictionary, resorting to original...')
+                break
+
             transcription_cleaned = "".join(clean_char)
             tokens = [model_dictionary[c] for c in transcription_cleaned]
 
@@ -208,10 +214,12 @@ def align(
 
             # check if timestamp range is still valid
             if t1 >= MAX_DURATION:
-                print("Failed to align segment: original start time longer than audio duration, skipping...")
+                print(
+                    "Failed to align segment: original start time longer than audio duration, skipping...")
                 break
             if t2 - t1 < 0.02:
-                print("Failed to align segment: duration smaller than 0.02s time precision")
+                print(
+                    "Failed to align segment: duration smaller than 0.02s time precision")
                 break
 
             f1 = int(t1 * SAMPLE_RATE)
@@ -225,7 +233,8 @@ def align(
                 elif model_type == "huggingface":
                     emissions = model(waveform_segment.to(device)).logits
                 else:
-                    raise NotImplementedError(f"Align model of type {model_type} not supported.")
+                    raise NotImplementedError(
+                        f"Align model of type {model_type} not supported.")
                 emissions = torch.log_softmax(emissions, dim=-1)
 
             emission = emissions[0].cpu().detach()
@@ -233,16 +242,16 @@ def align(
             trellis = get_trellis(emission, tokens)
             path = backtrack(trellis, emission, tokens)
             if path is None:
-                print(f'Failed to align segment ("{segment["text"]}"): backtrack failed, resorting to original...')
+                print(
+                    f'Failed to align segment ("{segment["text"]}"): backtrack failed, resorting to original...')
                 break
             char_segments = merge_repeats(path, transcription_cleaned)
             # word_segments = merge_words(char_segments)
-            
 
             # sub-segments
             if "seg-text" not in segment:
                 segment["seg-text"] = [transcription]
-                
+
             seg_lens = [0] + [len(x) for x in segment["seg-text"]]
             seg_lens_cumsum = list(np.cumsum(seg_lens))
             sub_seg_idx = 0
@@ -257,13 +266,12 @@ def align(
                 elif cdx+1 == len(transcription):
                     is_last = True
 
-                
                 start, end, score = None, None, None
                 if cdx in clean_cdx:
                     char_seg = char_segments[clean_cdx.index(cdx)]
                     start = char_seg.start * ratio + t1
                     end = char_seg.end * ratio + t1
-                    score = char_seg.score        
+                    score = char_seg.score
 
                 char_segments_arr["char"].append(char)
                 char_segments_arr["start"].append(start)
@@ -293,17 +301,23 @@ def align(
         # reset prev_t2 due to drifting issues
         if not segment_align_success:
             prev_t2 = 0
-        
+
     char_segments_arr = pd.DataFrame(char_segments_arr)
     not_space = char_segments_arr["char"] != " "
 
-    per_seg_grp = char_segments_arr.groupby(["segment-idx", "subsegment-idx"], as_index = False)
-    char_segments_arr = per_seg_grp.apply(lambda x: x.reset_index(drop = True)).reset_index()
-    per_word_grp = char_segments_arr[not_space].groupby(["segment-idx", "subsegment-idx", "word-idx"])
-    per_subseg_grp = char_segments_arr[not_space].groupby(["segment-idx", "subsegment-idx"])
+    per_seg_grp = char_segments_arr.groupby(
+        ["segment-idx", "subsegment-idx"], as_index=False)
+    char_segments_arr = per_seg_grp.apply(
+        lambda x: x.reset_index(drop=True)).reset_index()
+    per_word_grp = char_segments_arr[not_space].groupby(
+        ["segment-idx", "subsegment-idx", "word-idx"])
+    per_subseg_grp = char_segments_arr[not_space].groupby(
+        ["segment-idx", "subsegment-idx"])
     per_seg_grp = char_segments_arr[not_space].groupby(["segment-idx"])
-    char_segments_arr["local-char-idx"] = char_segments_arr.groupby(["segment-idx", "subsegment-idx"]).cumcount()
-    per_word_grp = char_segments_arr[not_space].groupby(["segment-idx", "subsegment-idx", "word-idx"]) # regroup
+    char_segments_arr["local-char-idx"] = char_segments_arr.groupby(
+        ["segment-idx", "subsegment-idx"]).cumcount()
+    per_word_grp = char_segments_arr[not_space].groupby(
+        ["segment-idx", "subsegment-idx", "word-idx"])  # regroup
 
     word_segments_arr = {}
 
@@ -318,56 +332,77 @@ def align(
     word_segments_arr["segment-text-end"] = per_word_grp["local-char-idx"].max().astype(int).values+1
     word_segments_arr = pd.DataFrame(word_segments_arr)
 
-    word_segments_arr[["segment-idx", "subsegment-idx", "word-idx"]] = per_word_grp["local-char-idx"].min().reset_index()[["segment-idx", "subsegment-idx", "word-idx"]].astype(int)
+    word_segments_arr[["segment-idx", "subsegment-idx", "word-idx"]] = per_word_grp["local-char-idx"].min(
+    ).reset_index()[["segment-idx", "subsegment-idx", "word-idx"]].astype(int)
     segments_arr = {}
-    segments_arr["start"] = per_subseg_grp["start"].min().reset_index()["start"]
+    segments_arr["start"] = per_subseg_grp["start"].min().reset_index()[
+        "start"]
     segments_arr["end"] = per_subseg_grp["end"].max().reset_index()["end"]
     segments_arr = pd.DataFrame(segments_arr)
-    segments_arr[["segment-idx", "subsegment-idx-start"]] = per_subseg_grp["start"].min().reset_index()[["segment-idx", "subsegment-idx"]]
+    segments_arr[["segment-idx", "subsegment-idx-start"]
+                 ] = per_subseg_grp["start"].min().reset_index()[["segment-idx", "subsegment-idx"]]
     segments_arr["subsegment-idx-end"] = segments_arr["subsegment-idx-start"] + 1
 
     # interpolate missing words / sub-segments
     if interpolate_method != "ignore":
-        wrd_subseg_grp = word_segments_arr.groupby(["segment-idx", "subsegment-idx"], group_keys=False)
-        wrd_seg_grp = word_segments_arr.groupby(["segment-idx"], group_keys=False)
+        wrd_subseg_grp = word_segments_arr.groupby(
+            ["segment-idx", "subsegment-idx"], group_keys=False)
+        wrd_seg_grp = word_segments_arr.groupby(
+            ["segment-idx"], group_keys=False)
         # we still know which word timestamps are interpolated because their score == nan
-        word_segments_arr["start"] = wrd_subseg_grp['start'].apply(lambda group: interpolate_nans(group, method=interpolate_method))
-        word_segments_arr["end"] = wrd_subseg_grp['end'].apply(lambda group: interpolate_nans(group, method=interpolate_method))
+        word_segments_arr["start"] = wrd_subseg_grp['start'].apply(
+            lambda group: interpolate_nans(group, method=interpolate_method))
+        word_segments_arr["end"] = wrd_subseg_grp['end'].apply(
+            lambda group: interpolate_nans(group, method=interpolate_method))
 
-        word_segments_arr["start"] = wrd_seg_grp['start'].apply(lambda group: interpolate_nans(group, method=interpolate_method))
-        word_segments_arr["end"] = wrd_seg_grp['end'].apply(lambda group: interpolate_nans(group, method=interpolate_method))
+        word_segments_arr["start"] = wrd_seg_grp['start'].apply(
+            lambda group: interpolate_nans(group, method=interpolate_method))
+        word_segments_arr["end"] = wrd_seg_grp['end'].apply(
+            lambda group: interpolate_nans(group, method=interpolate_method))
 
-        sub_seg_grp =  segments_arr.groupby(["segment-idx"], group_keys=False)
-        segments_arr['start'] = sub_seg_grp['start'].apply(lambda group: interpolate_nans(group, method=interpolate_method))
-        segments_arr['end'] = sub_seg_grp['end'].apply(lambda group: interpolate_nans(group, method=interpolate_method))
+        sub_seg_grp = segments_arr.groupby(["segment-idx"], group_keys=False)
+        segments_arr['start'] = sub_seg_grp['start'].apply(
+            lambda group: interpolate_nans(group, method=interpolate_method))
+        segments_arr['end'] = sub_seg_grp['end'].apply(
+            lambda group: interpolate_nans(group, method=interpolate_method))
 
         # merge words & subsegments which are missing times
-        word_grp = word_segments_arr.groupby(["segment-idx", "subsegment-idx", "end"])
+        word_grp = word_segments_arr.groupby(
+            ["segment-idx", "subsegment-idx", "end"])
 
-        word_segments_arr["segment-text-start"] = word_grp["segment-text-start"].transform(min)
-        word_segments_arr["segment-text-end"] = word_grp["segment-text-end"].transform(max)
-        word_segments_arr.drop_duplicates(subset=["segment-idx", "subsegment-idx", "end"], inplace=True)
+        word_segments_arr["segment-text-start"] = word_grp["segment-text-start"].transform(
+            min)
+        word_segments_arr["segment-text-end"] = word_grp["segment-text-end"].transform(
+            max)
+        word_segments_arr.drop_duplicates(
+            subset=["segment-idx", "subsegment-idx", "end"], inplace=True)
 
         seg_grp_dup = segments_arr.groupby(["segment-idx", "start", "end"])
-        segments_arr["subsegment-idx-start"] = seg_grp_dup["subsegment-idx-start"].transform(min)
-        segments_arr["subsegment-idx-end"] = seg_grp_dup["subsegment-idx-end"].transform(max)
-        segments_arr.drop_duplicates(subset=["segment-idx", "subsegment-idx-start", "subsegment-idx-end"], inplace=True)
+        segments_arr["subsegment-idx-start"] = seg_grp_dup["subsegment-idx-start"].transform(
+            min)
+        segments_arr["subsegment-idx-end"] = seg_grp_dup["subsegment-idx-end"].transform(
+            max)
+        segments_arr.drop_duplicates(
+            subset=["segment-idx", "subsegment-idx-start", "subsegment-idx-end"], inplace=True)
     else:
         word_segments_arr.dropna(inplace=True)
         segments_arr.dropna(inplace=True)
 
     # if some segments still have missing timestamps (usually because all numerals / symbols), then use original timestamps...
-    segments_arr['start'].fillna(pd.Series([x['start'] for x in transcript]), inplace=True)
-    segments_arr['end'].fillna(pd.Series([x['end'] for x in transcript]), inplace=True)
+    segments_arr['start'].fillna(
+        pd.Series([x['start'] for x in transcript]), inplace=True)
+    segments_arr['end'].fillna(pd.Series([x['end']
+                               for x in transcript]), inplace=True)
     segments_arr['subsegment-idx-start'].fillna(0, inplace=True)
     segments_arr['subsegment-idx-end'].fillna(1, inplace=True)
-
 
     aligned_segments = []
     aligned_segments_word = []
 
-    word_segments_arr.set_index(["segment-idx", "subsegment-idx"], inplace=True)
-    char_segments_arr.set_index(["segment-idx", "subsegment-idx", "word-idx"], inplace=True)
+    word_segments_arr.set_index(
+        ["segment-idx", "subsegment-idx"], inplace=True)
+    char_segments_arr.set_index(
+        ["segment-idx", "subsegment-idx", "word-idx"], inplace=True)
 
     for sdx, srow in segments_arr.iterrows():
 
@@ -375,7 +410,8 @@ def align(
         try:
             sub_start = int(srow["subsegment-idx-start"])
         except:
-            import pdb; pdb.set_trace()
+            import pdb
+            pdb.set_trace()
         sub_end = int(srow["subsegment-idx-end"])
 
         seg = transcript[seg_idx]
@@ -390,9 +426,12 @@ def align(
         cseg = char_segments_arr.loc[seg_idx].loc[sub_start:sub_end-1]
         # fixes bug for single segment in transcript
         cseg['segment-text-start'] = cseg['level_1'] if 'level_1' in cseg else 0
-        cseg['segment-text-end'] = cseg['level_1'] + 1 if 'level_1' in cseg else 1
-        if 'level_1' in cseg: del cseg['level_1']
-        if 'level_0' in cseg: del cseg['level_0']
+        cseg['segment-text-end'] = cseg['level_1'] + \
+            1 if 'level_1' in cseg else 1
+        if 'level_1' in cseg:
+            del cseg['level_1']
+        if 'level_0' in cseg:
+            del cseg['level_0']
         cseg.reset_index(inplace=True)
         aligned_segments.append(
             {
@@ -430,13 +469,14 @@ def align(
             }
         )
 
-    
     return {"segments": aligned_segments, "word_segments": aligned_segments_word}
 
 
 """
 source: https://pytorch.org/tutorials/intermediate/forced_alignment_with_torchaudio_tutorial.html
 """
+
+
 def get_trellis(emission, tokens, blank_id=0):
     num_frame = emission.size(0)
     num_tokens = len(tokens)
@@ -459,11 +499,13 @@ def get_trellis(emission, tokens, blank_id=0):
         )
     return trellis
 
+
 @dataclass
 class Point:
     token_index: int
     time_index: int
     score: float
+
 
 def backtrack(trellis, emission, tokens, blank_id=0):
     # Note:
@@ -487,7 +529,8 @@ def backtrack(trellis, emission, tokens, blank_id=0):
         changed = trellis[t - 1, j - 1] + emission[t - 1, tokens[j - 1]]
 
         # 2. Store the path with frame-wise probability.
-        prob = emission[t - 1, tokens[j - 1] if changed > stayed else 0].exp().item()
+        prob = emission[t - 1, tokens[j - 1]
+                        if changed > stayed else 0].exp().item()
         # Return token index and time index in non-trellis coordinate.
         path.append(Point(j - 1, t - 1, prob))
 
@@ -502,6 +545,8 @@ def backtrack(trellis, emission, tokens, blank_id=0):
     return path[::-1]
 
 # Merge the labels
+
+
 @dataclass
 class Segment:
     label: str
@@ -515,6 +560,7 @@ class Segment:
     @property
     def length(self):
         return self.end - self.start
+
 
 def merge_repeats(path, transcript):
     i1, i2 = 0, 0
@@ -534,6 +580,7 @@ def merge_repeats(path, transcript):
         i1 = i2
     return segments
 
+
 def merge_words(segments, separator="|"):
     words = []
     i1, i2 = 0, 0
@@ -542,8 +589,10 @@ def merge_words(segments, separator="|"):
             if i1 != i2:
                 segs = segments[i1:i2]
                 word = "".join([seg.label for seg in segs])
-                score = sum(seg.score * seg.length for seg in segs) / sum(seg.length for seg in segs)
-                words.append(Segment(word, segments[i1].start, segments[i2 - 1].end, score))
+                score = sum(seg.score * seg.length for seg in segs) / \
+                    sum(seg.length for seg in segs)
+                words.append(
+                    Segment(word, segments[i1].start, segments[i2 - 1].end, score))
             i1 = i2 + 1
             i2 = i1
         else:
